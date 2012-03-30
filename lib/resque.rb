@@ -1,5 +1,3 @@
-require 'redis/namespace'
-
 require 'resque/version'
 
 require 'resque/errors'
@@ -13,56 +11,57 @@ require 'resque/job'
 require 'resque/worker'
 require 'resque/plugin'
 
+# require RedisBackend class to backward compatibility
+require 'resque/backends/redis'
+
 module Resque
   include Helpers
   extend self
 
-  # Accepts:
-  #   1. A 'hostname:port' String
-  #   2. A 'hostname:port:db' String (to select the Redis db)
-  #   3. A 'hostname:port/namespace' String (to set the Redis namespace)
-  #   4. A Redis URL String 'redis://host:port'
-  #   5. An instance of `Redis`, `Redis::Client`, `Redis::DistRedis`,
-  #      or `Redis::Namespace`.
-  def redis=(server)
-    case server
-    when String
-      if server =~ /redis\:\/\//
-        redis = Redis.connect(:url => server, :thread_safe => true)
-      else
-        server, namespace = server.split('/', 2)
-        host, port, db = server.split(':')
-        redis = Redis.new(:host => host, :port => port,
-          :thread_safe => true, :db => db)
-      end
-      namespace ||= :resque
+  # required methods' names list
+  def methods_list
+    [
+      :push, :pop, :size, :peek,
+      :queues, :remove_queue,
+      :keys, :id
+    ]
+  end
 
-      @redis = Redis::Namespace.new(namespace, :redis => redis)
-    when Redis::Namespace
-      @redis = server
+  # Default backend setup method
+  # Parameters:
+  #   'klass' - Resque backend class (example: Backend::Redis)
+  #   'opts'  - any options to initialize backend object
+  #
+  # NOTE: you're always welcome to discuss better method here
+  def setup_backend(klass, opts = nil)
+    if respond_to_all?(klass, methods_list)
+      @backend = opts.nil? ? klass.new : klass.new(opts)
     else
-      @redis = Redis::Namespace.new(:resque, :redis => server)
+      # raise "Backend class does not respond to all required methods"
+      return nil
     end
+  end
+
+  def backend
+    @backend
+  end
+
+  def redis=(server)
+    setup_backend(RedisBackend, server)
   end
 
   # Returns the current Redis connection. If none has been created, will
   # create a new one.
   def redis
-    return @redis if @redis
-    self.redis = Redis.respond_to?(:connect) ? Redis.connect : "localhost:6379"
+    return @backend if @backend
+    self.redis = RedisBackend.connect
     self.redis
   end
 
   def redis_id
-    # support 1.x versions of redis-rb
-    if redis.respond_to?(:server)
-      redis.server
-    elsif redis.respond_to?(:nodes) # distributed
-      redis.nodes.map { |n| n.id }.join(', ')
-    else
-      redis.client.id
-    end
+    redis.id
   end
+  
 
   # The `before_first_fork` hook will be run in the **parent** process
   # only once, before forking to run the first job. Be careful- any
@@ -106,7 +105,7 @@ module Resque
   attr_writer :after_fork
 
   def to_s
-    "Resque Client connected to #{redis_id}"
+    "Resque Client connected to #{backend.id}"
   end
 
   attr_accessor :inline
@@ -136,21 +135,20 @@ module Resque
   #
   # Returns nothing
   def push(queue, item)
-    watch_queue(queue)
-    redis.rpush "queue:#{queue}", encode(item)
+    backend.push(queue, encode(item))
   end
 
   # Pops a job off a queue. Queue name should be a string.
   #
   # Returns a Ruby object.
   def pop(queue)
-    decode redis.lpop("queue:#{queue}")
+    decode backend.pop(queue)
   end
 
   # Returns an integer representing the size of a queue.
   # Queue name should be a string.
   def size(queue)
-    redis.llen("queue:#{queue}").to_i
+    backend.size(queue).to_i
   end
 
   # Returns an array of items currently queued. Queue name should be
@@ -162,36 +160,29 @@ module Resque
   # To get the 3rd page of a 30 item, paginatied list one would use:
   #   Resque.peek('my_list', 59, 30)
   def peek(queue, start = 0, count = 1)
-    list_range("queue:#{queue}", start, count)
-  end
-
-  # Does the dirty work of fetching a range of items from a Redis list
-  # and converting them into Ruby objects.
-  def list_range(key, start = 0, count = 1)
+    result = backend.peek(queue, start, count)
     if count == 1
-      decode redis.lindex(key, start)
+      decode result
     else
-      Array(redis.lrange(key, start, start+count-1)).map do |item|
-        decode item
-      end
+      result.map { |val| decode(val) }
     end
   end
 
+
   # Returns an array of all known Resque queues as strings.
   def queues
-    Array(redis.smembers(:queues))
+    Array(backend.queues)
   end
 
   # Given a queue name, completely deletes the queue.
   def remove_queue(queue)
-    redis.srem(:queues, queue.to_s)
-    redis.del("queue:#{queue}")
+    backend.remove_queue(queue)
   end
 
   # Used internally to keep track of which queues we've created.
   # Don't call this directly.
   def watch_queue(queue)
-    redis.sadd(:queues, queue.to_s)
+    backend.watch_queue(queue)
   end
 
 
@@ -353,7 +344,7 @@ module Resque
       :workers   => workers.size.to_i,
       :working   => working.size,
       :failed    => Stat[:failed],
-      :servers   => [redis_id],
+      :servers   => [backend.id],
       :environment  => ENV['RAILS_ENV'] || ENV['RACK_ENV'] || 'development'
     }
   end
@@ -361,9 +352,7 @@ module Resque
   # Returns an array of all known Resque keys in Redis. Redis' KEYS operation
   # is O(N) for the keyspace, so be careful - this can be slow for big databases.
   def keys
-    redis.keys("*").map do |key|
-      key.sub("#{redis.namespace}:", '')
-    end
+    backend.keys("*")
   end
 end
 

@@ -79,5 +79,15 @@ module Resque
       end
       constant
     end
+    
+    # Checks that class respond to all methods in list
+    def respond_to_all?(klass, methods)
+      respond = true
+      methods.each do |meth|
+        respond = false unless klass.respond_to?(meth)
+      end
+
+      respond
+    end
   end
 end
