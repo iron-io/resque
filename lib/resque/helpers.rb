@@ -16,6 +16,11 @@ module Resque
       Resque.redis
     end
 
+    # Access to Backend instead to only redis
+    def backend
+      Resque.backend
+    end
+
     # Given a Ruby object, returns a string suitable for storage in a
     # queue.
     def encode(object)

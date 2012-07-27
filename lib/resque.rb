@@ -23,7 +23,7 @@ module Resque
     [
       :push, :pop, :size, :peek,
       :queues, :remove_queue,
-      :keys, :id
+      :client, :keys, :id
     ]
   end
 
@@ -53,7 +53,7 @@ module Resque
   # Returns the current Redis connection. If none has been created, will
   # create a new one.
   def redis
-    return @backend if @backend
+    return @backend.client if @backend
     self.redis = RedisBackend.connect
     self.redis
   end
@@ -136,6 +136,8 @@ module Resque
   # Returns nothing
   def push(queue, item)
     backend.push(queue, encode(item))
+    # are we need to return nothing?
+    return nil
   end
 
   # Pops a job off a queue. Queue name should be a string.
@@ -178,13 +180,6 @@ module Resque
   def remove_queue(queue)
     backend.remove_queue(queue)
   end
-
-  # Used internally to keep track of which queues we've created.
-  # Don't call this directly.
-  def watch_queue(queue)
-    backend.watch_queue(queue)
-  end
-
 
   #
   # job shortcuts

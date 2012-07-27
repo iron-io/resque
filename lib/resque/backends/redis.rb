@@ -40,8 +40,9 @@ module Resque
         @redis.client.id
       end
     end
-
-    def redis
+    
+    # to have access to redis instance (backward compatibility)
+    def client
       @redis
     end
 
@@ -56,7 +57,7 @@ module Resque
 
     # Pops a job off a queue. Queue name should be a string.
     #
-    # Returns a Ruby object.
+    # Returns a JSON string.
     def pop(queue)
       @redis.lpop("queue:#{queue}")
     end
@@ -67,21 +68,14 @@ module Resque
       @redis.llen("queue:#{queue}").to_i
     end
 
-    # Returns an array of items currently queued. Queue name should be
-    # a string.
-    #
-    # start and count should be integer and can be used for pagination.
-    # start is the item to begin, count is how many items to return.
-    #
-    # To get the 3rd page of a 30 item, paginatied list one would use:
-    #   Resque.peek('my_list', 59, 30)
+    # Returns JSON string with objects
     def peek(queue, start = 0, count = 1)
       list_range("queue:#{queue}", start, count)
     end
 
     # Returns an array of all known queues as strings.
     def queues
-      Array(@redis.smembers(:queues))
+      @redis.smembers(:queues)
     end
 
     # Given a queue name, completely deletes the queue.
@@ -91,11 +85,12 @@ module Resque
     end
     
     def keys
-      backend.keys("*").map do |key|
+      @redis.keys("*").map do |key|
         key.sub("#{redis.namespace}:", '')
       end
     end
     
+    # backward compatibility
     def self.connect
       Redis.respond_to?(:connect) ? Redis.connect : "localhost:6379"
     end
